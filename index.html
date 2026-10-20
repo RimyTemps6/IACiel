@@ -6,18 +6,15 @@
 <title>Chatbot IA</title>
 <style>
   :root{
-    --bg:#eef2f4; --panel:#ffffff; --ink:#17232b; --muted:#5d6e78;
-    --me:#1f5f7a; --me-ink:#ffffff; --bot:#e3eaee; --line:#cfd9df; --err:#b3261e;
-  }
-  @media (prefers-color-scheme:dark){
-    :root{ --bg:#10181d; --panel:#172229; --ink:#e6eef2; --muted:#8fa3ae;
-      --me:#2f86a8; --me-ink:#ffffff; --bot:#22323b; --line:#2b3b45; --err:#ff8a80; }
+    color-scheme:dark;
+    --bg:#0c0b09; --ink:#ece3cc; --muted:#a89d82;
+    --me:#e9dfc4; --me-ink:#14110d; --bot:#1b1812; --line:#3a3326; --err:#e8a08a;
   }
   *{box-sizing:border-box}
   html,body{height:100%;margin:0}
-  body{background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  body{background:radial-gradient(90% 55% at 50% 38%,#1d1911 0%,var(--bg) 72%) fixed;color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
     display:flex;justify-content:center}
-  .app{width:100%;max-width:760px;height:100%;display:flex;flex-direction:column;background:var(--panel);
+  .app{width:100%;max-width:760px;height:100%;display:flex;flex-direction:column;background:transparent;
     padding-top:env(safe-area-inset-top,0px)}
   header{padding:14px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:12px}
   header h1{font-size:1.05rem;margin:0;font-weight:650}
@@ -39,8 +36,21 @@
   header{flex-wrap:wrap}
   .opts{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:.82rem;color:var(--muted)}
   .opts label{display:flex;align-items:center;gap:4px;cursor:pointer}
+  textarea{background:#14110d}
+  form{position:relative}
+  .attach-btn{padding:0 14px;font-size:1.4rem;background:transparent;color:var(--ink);border:1px solid var(--line)}
+  .menu{position:absolute;bottom:calc(100% + 6px);left:14px;background:#14110d;border:1px solid var(--line);border-radius:12px;padding:6px;display:none;flex-direction:column;min-width:190px;z-index:5}
+  .menu.open{display:flex}
+  .menu button{background:transparent;color:var(--ink);text-align:left;padding:10px 12px;font-weight:500;border-radius:8px}
+  .menu button:hover{background:#22201a}
+  #tray{display:flex;gap:8px;padding:8px 14px 0;overflow-x:auto}
+  #tray:empty{display:none}
+  .chip{flex:0 0 auto;border:1px solid var(--line);border-radius:10px;padding:4px 8px;font-size:.8rem;color:var(--muted);display:flex;align-items:center;gap:6px}
+  .chip img{width:44px;height:44px;object-fit:cover;border-radius:6px}
+  .chip b{cursor:pointer;color:var(--ink);font-size:1rem}
+  .m img{max-width:150px;border-radius:8px;display:block;margin-bottom:6px}
   .m.hidden-text{cursor:pointer;font-style:italic;color:var(--muted)}
-  .core{flex:1 1 0;min-height:0;position:relative;background:#0c0b09;overflow:hidden}
+  .core{flex:1 1 0;min-height:0;position:relative;background:transparent;overflow:hidden}
   #core{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:block}
   @supports (height:100dvh){html,body,.app{height:100dvh}}
   @media (max-width:560px){
@@ -69,7 +79,17 @@
   </header>
   <div class="core"><canvas id="core" aria-label="Núcleo da Ciel"></canvas></div>
   <div id="msgs"><div class="empty" id="empty">Escreva uma mensagem para começar a conversa.</div></div>
+  <div id="tray"></div>
   <form id="f">
+    <button class="attach-btn" id="plus" type="button" aria-label="Anexar">+</button>
+    <div class="menu" id="menu">
+      <button type="button" data-k="cam">📷 Tirar foto</button>
+      <button type="button" data-k="img">🖼️ Imagem da galeria</button>
+      <button type="button" data-k="file">📎 Arquivo de texto</button>
+    </div>
+    <input type="file" id="inCam" accept="image/*" capture="environment" hidden>
+    <input type="file" id="inImg" accept="image/*" multiple hidden>
+    <input type="file" id="inFile" accept=".txt,.md,.csv,.json,.xml,.html,.css,.js,.py,.java,.c,.cpp,.log,text/*" multiple hidden>
     <textarea id="t" rows="1" placeholder="Digite sua mensagem" autocomplete="off"></textarea>
     <button id="send" type="submit" disabled>Enviar</button>
   </form>
@@ -92,7 +112,7 @@ const firebaseConfig = {
 
 /* ===== 2) Onde a chave da Groq está guardada no Firestore =====
    Coleção: config  |  Documento: groq  |  Campo: apiKey (string)
-   Campos opcionais no mesmo documento: model (string), url (string), system (string) */
+   Campos opcionais no mesmo documento: model (string), url (string), visionModel (string), system (string) */
 const COLLECTION = "config";
 const DOCUMENT = "groq";
 
@@ -322,7 +342,7 @@ async function loadConfig(){
     if (!snap.exists()) throw new Error("Documento " + COLLECTION + "/" + DOCUMENT + " não existe no Firestore.");
     const data = snap.data();
     if (!data.apiKey) throw new Error("O documento não tem o campo apiKey.");
-    cfg = { key: data.apiKey, url: data.url || DEFAULT_URL, model: data.model || DEFAULT_MODEL, system: data.system || DEFAULT_SYSTEM };
+    cfg = { key: data.apiKey, url: data.url || DEFAULT_URL, visionModel: data.visionModel || "", model: data.model || DEFAULT_MODEL, system: data.system || DEFAULT_SYSTEM };
     setStatus("Pronto · modelo " + cfg.model);
     sendBtn.disabled = false;
   }catch(err){
@@ -332,22 +352,111 @@ async function loadConfig(){
   }
 }
 
+/* ===== INFORMAÇÕES EM TEMPO REAL (data/hora e clima, grátis e sem chave) ===== */
+const WMO = c => c === 0 ? "céu limpo" : c <= 3 ? "parcialmente nublado" : c <= 48 ? "neblina" : c <= 57 ? "garoa" : c <= 67 ? "chuva" : c <= 77 ? "neve" : c <= 82 ? "pancadas de chuva" : "tempestade";
+function getPosition(){
+  return new Promise((ok, no) => {
+    if (!navigator.geolocation) return no(new Error("localização indisponível"));
+    navigator.geolocation.getCurrentPosition(r => ok({ lat: r.coords.latitude, lon: r.coords.longitude, nome: "a localização do usuário" }), () => no(new Error("o usuário não liberou a localização")), { timeout: 8000, maximumAge: 600000 });
+  });
+}
+async function findCity(text){
+  const m = text.match(/\b(?:em|de|para|pra|na|no)\s+([A-ZÀ-Ú][\wÀ-ú]+(?:\s+(?:de|da|do)?\s*[A-ZÀ-Ú][\wÀ-ú]+)*)/);
+  if (!m) return null;
+  const r = await (await fetch("https://geocoding-api.open-meteo.com/v1/search?count=1&language=pt&name=" + encodeURIComponent(m[1]))).json();
+  const x = r.results && r.results[0];
+  return x ? { lat: x.latitude, lon: x.longitude, nome: x.name + (x.admin1 ? ", " + x.admin1 : "") } : null;
+}
+async function weather(text){
+  const pos = (await findCity(text)) || (await getPosition());
+  const u = "https://api.open-meteo.com/v1/forecast?latitude=" + pos.lat + "&longitude=" + pos.lon +
+    "&current=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,weather_code,wind_speed_10m" +
+    "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&forecast_days=3";
+  const d = await (await fetch(u)).json(), c = d.current, dy = d.daily;
+  const dias = dy.time.map((t, i) => t + ": " + WMO(dy.weather_code[i]) + ", mín " + dy.temperature_2m_min[i] + "°C, máx " + dy.temperature_2m_max[i] + "°C, chance de chuva " + dy.precipitation_probability_max[i] + "%").join("; ");
+  return "Clima real agora em " + pos.nome + ": " + WMO(c.weather_code) + ", " + c.temperature_2m + "°C (sensação " + c.apparent_temperature + "°C), umidade " + c.relative_humidity_2m + "%, vento " + c.wind_speed_10m + " km/h. Próximos dias: " + dias + ".";
+}
+async function liveContext(text){
+  const partes = ["Data e hora atuais: " + new Date().toLocaleString("pt-BR", { dateStyle: "full", timeStyle: "short" }) + "."];
+  if (/clima|temperatura|chuv|previs[aã]o|calor|frio|tempo (hoje|agora|amanh)|vai (chover|fazer)/i.test(text)){
+    try{ partes.push(await weather(text)); }
+    catch(e){ partes.push("Não foi possível consultar o clima (" + e.message + "). Peça ao usuário para dizer a cidade, com a inicial maiúscula."); }
+  }
+  return partes.join("\n");
+}
+
+/* ===== ANEXOS: foto, imagem e arquivo de texto ===== */
+const tray = $("tray"), menu = $("menu");
+let pending = [];
+$("plus").addEventListener("click", e => { e.stopPropagation(); menu.classList.toggle("open"); });
+document.addEventListener("click", () => menu.classList.remove("open"));
+menu.addEventListener("click", e => { const k = e.target.dataset && e.target.dataset.k; if (k) $({ cam: "inCam", img: "inImg", file: "inFile" }[k]).click(); });
+function resizeImage(file){
+  return new Promise((ok, no) => {
+    const url = URL.createObjectURL(file), im = new Image();
+    im.onload = () => {
+      const s = Math.min(1, 1024 / Math.max(im.width, im.height)), c = document.createElement("canvas");
+      c.width = Math.round(im.width * s); c.height = Math.round(im.height * s);
+      c.getContext("2d").drawImage(im, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url); ok(c.toDataURL("image/jpeg", .8));
+    };
+    im.onerror = () => { URL.revokeObjectURL(url); no(new Error("imagem inválida")); };
+    im.src = url;
+  });
+}
+function drawTray(){
+  tray.textContent = "";
+  pending.forEach((f, i) => {
+    const chip = document.createElement("div"); chip.className = "chip";
+    if (f.kind === "img"){ const im = new Image(); im.src = f.dataUrl; chip.append(im); } else chip.append("📎");
+    const nm = document.createElement("span"); nm.textContent = f.name.length > 18 ? f.name.slice(0, 16) + "…" : f.name; chip.append(nm);
+    const x = document.createElement("b"); x.textContent = "×"; x.onclick = () => { pending.splice(i, 1); drawTray(); }; chip.append(x);
+    tray.append(chip);
+  });
+}
+async function addFiles(list, kind){
+  for (const f of list){
+    try{
+      if (kind === "img") pending.push({ kind, name: f.name || "foto", dataUrl: await resizeImage(f) });
+      else {
+        if (f.size > 200000) throw new Error(f.name + " é grande demais (máximo 200 KB)");
+        pending.push({ kind, name: f.name, text: (await f.text()).slice(0, 60000) });
+      }
+    }catch(e){ add("error", "Não foi possível anexar: " + e.message); }
+  }
+  drawTray();
+}
+[["inCam", "img"], ["inImg", "img"], ["inFile", "file"]].forEach(([id, kind]) =>
+  $(id).addEventListener("change", e => { addFiles([...e.target.files], kind); e.target.value = ""; }));
+function trimImages(arr){
+  return arr.map((m, i) => (Array.isArray(m.content) && i < arr.length - 1)
+    ? { role: m.role, content: m.content.filter(x => x.type === "text").map(x => x.text).join("\n") + "\n[imagem enviada anteriormente]" } : m);
+}
+
 async function ask(){
   const text = input.value.trim();
-  if (!text || !cfg) return;
+  if ((!text && !pending.length) || !cfg) return;
   unlockSpeech(); setCore("thinking");
   input.value = ""; input.style.height = "auto";
-  add("user", text);
-  history.push({ role: "user", content: text });
+  const files = pending; pending = []; drawTray();
+  const imgs = files.filter(f => f.kind === "img"), docs = files.filter(f => f.kind === "file");
+  let body = text || (imgs.length ? "Descreva esta imagem." : "Leia o arquivo anexado.");
+  docs.forEach(d => { body += "\n\n[Arquivo anexado: " + d.name + "]\n" + d.text; });
+  const content = imgs.length ? [{ type: "text", text: body }, ...imgs.map(i => ({ type: "image_url", image_url: { url: i.dataUrl } }))] : body;
+  const ub = add("user", text);
+  imgs.forEach(i => { const im = new Image(); im.src = i.dataUrl; ub.prepend(im); });
+  docs.forEach(d => ub.append("\n📎 " + d.name));
+  history.push({ role: "user", content });
   sendBtn.disabled = true;
   const bubble = add("bot", "…");
   try{
+    const live = await liveContext(text);
     const res = await fetch(cfg.url, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": "Bearer " + cfg.key },
       body: JSON.stringify({
-        model: cfg.model,
-        messages: [{ role: "system", content: cfg.system }, ...history.slice(-20)]
+        model: (imgs.length && cfg.visionModel) ? cfg.visionModel : cfg.model,
+        messages: [{ role: "system", content: cfg.system + "\n\nInformações em tempo real (use quando fizer sentido e nunca invente dados):\n" + live }, ...trimImages(history.slice(-20))]
       })
     });
     const data = await res.json();
