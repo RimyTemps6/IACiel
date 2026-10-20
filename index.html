@@ -49,6 +49,21 @@
   .chip img{width:44px;height:44px;object-fit:cover;border-radius:6px}
   .chip b{cursor:pointer;color:var(--ink);font-size:1rem}
   .m img{max-width:150px;border-radius:8px;display:block;margin-bottom:6px}
+  .apirow{display:flex;gap:6px;margin-top:4px}
+  .apirow select{padding:4px 8px;border:1px solid var(--line);border-radius:10px;background:transparent;color:var(--muted);font:inherit;font-size:.82rem;max-width:190px}
+  .panel{position:fixed;inset:0;background:rgba(0,0,0,.72);display:flex;align-items:flex-end;justify-content:center;z-index:20}
+  .panel[hidden]{display:none}
+  .sheet{width:100%;max-width:560px;max-height:88dvh;overflow:auto;background:#14110d;border:1px solid var(--line);border-radius:16px 16px 0 0;padding:16px calc(16px + env(safe-area-inset-right,0px)) calc(16px + env(safe-area-inset-bottom,0px)) 16px}
+  .sheet-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+  .sheet h3{margin:16px 0 0;font-size:.95rem}
+  .sheet label{display:block;font-size:.8rem;color:var(--muted);margin-top:10px}
+  .sheet input,.sheet select{width:100%;margin-top:4px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);font:inherit}
+  .row{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;margin-bottom:6px}
+  .row.on{border-color:var(--me)}
+  .row .info{flex:1;min-width:0;font-size:.9rem}
+  .row .info small{display:block;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .note{font-size:.78rem;color:var(--muted);margin:10px 0 0}
+  #aAdd{margin-top:14px;padding:11px 18px;width:100%}
   .m.hidden-text{cursor:pointer;font-style:italic;color:var(--muted)}
   .core{flex:1 1 0;min-height:0;position:relative;background:transparent;overflow:hidden}
   #core{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:block}
@@ -69,6 +84,7 @@
     <div>
       <h1>Chatbot IA</h1>
       <div id="status">Conectando ao banco de dados…</div>
+      <div class="apirow"><select id="apiSel" aria-label="API em uso" disabled></select><button class="ghost" id="apiBtn" type="button">⚙ APIs</button></div>
     </div>
     <div class="opts">
       <label><input type="checkbox" id="optVoz" checked> Falar</label>
@@ -93,6 +109,30 @@
     <textarea id="t" rows="1" placeholder="Digite sua mensagem" autocomplete="off"></textarea>
     <button id="send" type="submit" disabled>Enviar</button>
   </form>
+</div>
+
+<div class="panel" id="apiPanel" hidden>
+  <div class="sheet">
+    <div class="sheet-head"><b>APIs da Ciel</b><button class="ghost" id="apiClose" type="button">Fechar</button></div>
+    <div id="apiList"></div>
+    <h3>Adicionar API</h3>
+    <label>Nome <input id="aName" placeholder="Ex.: Minha Groq" autocomplete="off"></label>
+    <label>Serviço
+      <select id="aPreset">
+        <option value="apinex">APInex</option>
+        <option value="groq">Groq</option>
+        <option value="openrouter">OpenRouter</option>
+        <option value="outro">Outro (preencher na mão)</option>
+      </select>
+    </label>
+    <label>Chave da API <input id="aKey" type="password" placeholder="Cole a chave aqui" autocomplete="off"></label>
+    <label>Endereço HTTP <input id="aUrl" placeholder="https://.../v1/chat/completions" autocomplete="off"></label>
+    <label>Modelo <input id="aModel" placeholder="Nome do modelo" autocomplete="off"></label>
+    <label>Modelo para imagens (opcional) <input id="aVision" placeholder="Deixe vazio se não souber" autocomplete="off"></label>
+    <div class="note" id="aErr" style="color:var(--err)"></div>
+    <button id="aAdd" type="button">Adicionar e usar</button>
+    <p class="note">As APIs que você adiciona aqui ficam salvas só neste aparelho e navegador. Se colar só a base do endereço (terminando em /v1), eu completo com /chat/completions.</p>
+  </div>
 </div>
 
 <script type="module">
@@ -323,6 +363,68 @@ function frame(now){
 }
 requestAnimationFrame(frame);
 
+/* ===== VÁRIAS APIs: lista, painel e escolha na hora ===== */
+const store = {
+  get(k, d){ try{ const v = JSON.parse(localStorage.getItem(k)); return v === null ? d : v; }catch(e){ return d; } },
+  set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
+};
+let customApis = store.get("ciel_apis", []);
+let activeId = store.get("ciel_active", "firestore");
+function allApis(){
+  const l = [];
+  if (cfg) l.push({ id: "firestore", name: "Padrão (Firestore)", key: cfg.key, url: cfg.url, model: cfg.model, visionModel: cfg.visionModel, builtin: true });
+  return l.concat(customApis);
+}
+function activeApi(){ const l = allApis(); return l.find(a => a.id === activeId) || l[0] || null; }
+function chooseApi(id){ activeId = id; store.set("ciel_active", id); refreshApis(); }
+function mkBtn(label, fn){ const b = document.createElement("button"); b.type = "button"; b.className = "ghost"; b.textContent = label; b.onclick = fn; return b; }
+function refreshApis(){
+  const l = allApis(), a = activeApi(), sel = $("apiSel"), box = $("apiList");
+  sel.textContent = ""; box.textContent = "";
+  l.forEach(x => { const o = document.createElement("option"); o.value = x.id; o.textContent = x.name; sel.append(o); });
+  if (a) sel.value = a.id;
+  sel.disabled = !l.length;
+  l.forEach(x => {
+    const r = document.createElement("div"); r.className = "row" + (a && a.id === x.id ? " on" : "");
+    const info = document.createElement("div"); info.className = "info";
+    const t = document.createElement("div"); t.textContent = x.name;
+    const s = document.createElement("small"); s.textContent = x.model + " · " + x.url.replace(/^https?:\/\//, "") + " · chave ••••" + String(x.key).slice(-4);
+    info.append(t, s); r.append(info);
+    r.append(mkBtn(a && a.id === x.id ? "Em uso" : "Usar", () => chooseApi(x.id)));
+    if (!x.builtin) r.append(mkBtn("Excluir", () => {
+      if (!confirm("Excluir " + x.name + "?")) return;
+      customApis = customApis.filter(c => c.id !== x.id); store.set("ciel_apis", customApis); refreshApis();
+    }));
+    box.append(r);
+  });
+  sendBtn.disabled = !a;
+  if (a) setStatus("Pronto · " + a.name + " · modelo " + a.model);
+}
+const PRESETS = {
+  apinex: { url: "https://api.apinex.bond/v1/chat/completions", model: "free/deepseek-v4-pro-0813" },
+  groq: { url: "https://api.groq.com/openai/v1/chat/completions", model: "openai/gpt-oss-120b" },
+  openrouter: { url: "https://openrouter.ai/api/v1/chat/completions", model: "" },
+  outro: { url: "", model: "" }
+};
+function applyPreset(){ const p = PRESETS[$("aPreset").value]; $("aUrl").value = p.url; $("aModel").value = p.model; }
+$("aPreset").addEventListener("change", applyPreset); applyPreset();
+$("apiBtn").addEventListener("click", () => { $("apiPanel").hidden = false; });
+$("apiClose").addEventListener("click", () => { $("apiPanel").hidden = true; });
+$("apiPanel").addEventListener("click", e => { if (e.target.id === "apiPanel") e.target.hidden = true; });
+$("apiSel").addEventListener("change", e => chooseApi(e.target.value));
+$("aAdd").addEventListener("click", () => {
+  const key = $("aKey").value.trim(), model = $("aModel").value.trim(), err = $("aErr");
+  let url = $("aUrl").value.trim();
+  if (!key || !url || !model){ err.textContent = "Preencha a chave, o endereço e o modelo."; return; }
+  if (!/^https:\/\//i.test(url)){ err.textContent = "O endereço precisa começar com https://"; return; }
+  if (!/chat\/completions\/?$/i.test(url)) url = url.replace(/\/+$/, "") + "/chat/completions";
+  const id = "c" + Date.now();
+  customApis.push({ id, name: $("aName").value.trim() || "API " + (customApis.length + 1), key, url, model, visionModel: $("aVision").value.trim() });
+  store.set("ciel_apis", customApis);
+  ["aName", "aKey", "aVision"].forEach(i => $(i).value = ""); err.textContent = ""; applyPreset();
+  chooseApi(id);
+});
+
 function setStatus(text, isErr){ statusEl.textContent = text; statusEl.classList.toggle("err", !!isErr); }
 
 function add(role, text){
@@ -343,12 +445,12 @@ async function loadConfig(){
     const data = snap.data();
     if (!data.apiKey) throw new Error("O documento não tem o campo apiKey.");
     cfg = { key: data.apiKey, url: data.url || DEFAULT_URL, visionModel: data.visionModel || "", model: data.model || DEFAULT_MODEL, system: data.system || DEFAULT_SYSTEM };
-    setStatus("Pronto · modelo " + cfg.model);
-    sendBtn.disabled = false;
+    refreshApis();
   }catch(err){
     console.error(err);
     const denied = /permission|insufficient/i.test(err.message);
     setStatus(denied ? "Sem permissão: confira as regras do Firestore." : "Erro: " + err.message, true);
+    refreshApis();
   }
 }
 
@@ -435,7 +537,8 @@ function trimImages(arr){
 
 async function ask(){
   const text = input.value.trim();
-  if ((!text && !pending.length) || !cfg) return;
+  const api = activeApi();
+  if ((!text && !pending.length) || !api) return;
   unlockSpeech(); setCore("thinking");
   input.value = ""; input.style.height = "auto";
   const files = pending; pending = []; drawTray();
@@ -451,12 +554,12 @@ async function ask(){
   const bubble = add("bot", "…");
   try{
     const live = await liveContext(text);
-    const res = await fetch(cfg.url, {
+    const res = await fetch(api.url, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + cfg.key },
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + api.key },
       body: JSON.stringify({
-        model: (imgs.length && cfg.visionModel) ? cfg.visionModel : cfg.model,
-        messages: [{ role: "system", content: cfg.system + "\n\nInformações em tempo real (use quando fizer sentido e nunca invente dados):\n" + live }, ...trimImages(history.slice(-20))]
+        model: (imgs.length && api.visionModel) ? api.visionModel : api.model,
+        messages: [{ role: "system", content: (cfg && cfg.system || DEFAULT_SYSTEM) + "\n\nInformações em tempo real (use quando fizer sentido e nunca invente dados):\n" + live }, ...trimImages(history.slice(-20))]
       })
     });
     const data = await res.json();
