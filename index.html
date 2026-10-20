@@ -92,11 +92,13 @@ const firebaseConfig = {
 
 /* ===== 2) Onde a chave da Groq está guardada no Firestore =====
    Coleção: config  |  Documento: groq  |  Campo: apiKey (string)
-   Campos opcionais no mesmo documento: model (string), system (string) */
+   Campos opcionais no mesmo documento: model (string), url (string), system (string) */
 const COLLECTION = "config";
 const DOCUMENT = "groq";
 
-const DEFAULT_MODEL = "llama-3.3-70b-versatile";
+/* Serviço de IA: troque aqui ou, sem mexer no GitHub, crie os campos "url" e "model" no Firestore (config/groq) */
+const DEFAULT_URL = "https://api.apinex.bond/v1/chat/completions";
+const DEFAULT_MODEL = "free/deepseek-v4-pro-0813";
 /* ===== 3) PERSONALIDADE DA IA — EDITE AQUI =====
    Troque os textos entre aspas. Depois salve o arquivo e envie de novo ao GitHub. */
 const PERSONALIDADE = {
@@ -320,7 +322,7 @@ async function loadConfig(){
     if (!snap.exists()) throw new Error("Documento " + COLLECTION + "/" + DOCUMENT + " não existe no Firestore.");
     const data = snap.data();
     if (!data.apiKey) throw new Error("O documento não tem o campo apiKey.");
-    cfg = { key: data.apiKey, model: data.model || DEFAULT_MODEL, system: data.system || DEFAULT_SYSTEM };
+    cfg = { key: data.apiKey, url: data.url || DEFAULT_URL, model: data.model || DEFAULT_MODEL, system: data.system || DEFAULT_SYSTEM };
     setStatus("Pronto · modelo " + cfg.model);
     sendBtn.disabled = false;
   }catch(err){
@@ -340,7 +342,7 @@ async function ask(){
   sendBtn.disabled = true;
   const bubble = add("bot", "…");
   try{
-    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    const res = await fetch(cfg.url, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": "Bearer " + cfg.key },
       body: JSON.stringify({
