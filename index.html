@@ -660,21 +660,22 @@ $("clear").addEventListener("click", () => {
   msgs.innerHTML = '<div class="empty" id="empty">Escreva uma mensagem para começar a conversa.</div>';
 });
 
-/* ===== ATIVAÇÃO POR VOZ: diga "Ciel" e converse sem tocar na tela =====
-   Usa o reconhecimento de voz do navegador (Chrome/Edge). Fica em espera até ouvir "Ciel";
-   depois escuta seus pedidos, responde e continua ouvindo por alguns segundos (modo conversa). */
+/* ===== ATIVAÇÃO POR VOZ: diga "Ciel" e depois o pedido =====
+   Fica sempre ouvindo, mas ignora tudo até ouvir "Ciel". Depois de "Ciel", junta o que você falar
+   e envia quando você faz uma pausa. Ela responde e volta a esperar o próximo "Ciel". */
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 const optEscuta = $("optEscuta"), listenStat = $("listenStat");
-const ACTIVE_MS = 25000;                       // tempo de conversa sem precisar repetir "Ciel"
-let rec = null, recRunning = false, recStartAt = 0, failCount = 0;
-let awakeTimer = null, restartTimer = null, flashTimer = null, lastFinal = "", lastFinalAt = 0;
-const WAKE_STRONG = "ciel|ciél|siel|ciell|cyel|kiel|sciel";
-const WAKE_LOOSE = "céu|ceu|ciu|siu|sil|cil|sieu";   // variações que o reconhecimento costuma ouvir (só no começo da frase)
+const SILENCE_MS = 1400;   // pausa depois de falar = o pedido terminou
+const WAIT_MS = 8000;      // disse só "Ciel" e não falou nada: desiste e volta a esperar
+let rec = null, recRunning = false, recStartAt = 0, failCount = 0, captureIdx = 0;
+let sendTimer = null, waitTimer = null, restartTimer = null, flashTimer = null, capText = "", heard = "";
+const WAKE_STRONG = "ciel|ciél|siel|ciell|siell|cyel|kiel|sciel";
+const WAKE_LOOSE = "céu|ceu|ciu|siu|sil|cil|sieu|sel|cel|ciou|siou";   // como o reconhecimento costuma ouvir "Ciel" (só no começo da frase)
 const GREET = "(?:(?:oi|olá|ola|ei|ey|ê|ô|hey|e aí|e ai|ok|okay|opa)[\\s,]+)?";
 const SEP = "[\\s,!.:;?-]*";
 const reStart = new RegExp("^\\s*" + GREET + "(?:" + WAKE_STRONG + "|" + WAKE_LOOSE + ")(?!\\p{L})" + SEP + "(.*)$", "isu");
 const reAny = new RegExp("(?<!\\p{L})(?:" + WAKE_STRONG + ")(?!\\p{L})" + SEP + "(.*)$", "isu");
-const STOP = /^(tchau|até mais|até logo|pode parar|encerrar|cancelar|esquece)[\s,!.]*$/i;
+const STOP = /^(tchau|cancelar|cancela|esquece|deixa pra lá|deixa para lá)[\s,!.]*$/i;
 try{ wantListen = !!SR && localStorage.getItem("optEscuta") === "1"; }catch(e){}
 optEscuta.checked = wantListen;
 
@@ -690,30 +691,60 @@ function paintListen(){
   if (!wantListen){ if (!flashTimer) listenStat.hidden = true; return; }
   if (flashTimer) return;
   listenStat.hidden = false;
-  listenStat.textContent = core.state !== "idle" ? "🎙 Em pausa enquanto a Ciel responde"
-    : awake ? "🎙 Ouvindo… pode falar" : "🎙 Diga “Ciel” para me chamar";
+  let t;
+  if (core.state !== "idle") t = "🎙 Em pausa enquanto a Ciel responde";
+  else if (awake) t = capText ? "🎙 Ouvindo: “" + capText + "”" : "🎙 Pode falar…";
+  else t = "🎙 Diga “Ciel” para me chamar" + (heard ? " — ouvi: “" + heard + "”" : "");
+  listenStat.textContent = t;
   listenStat.classList.toggle("on", awake && core.state === "idle");
 }
 function flashListen(text){
   clearTimeout(flashTimer); listenStat.hidden = false; listenStat.classList.remove("on"); listenStat.textContent = text;
   flashTimer = setTimeout(() => { flashTimer = null; paintListen(); }, 7000);
 }
-function armAwakeTimer(){
-  clearTimeout(awakeTimer);
-  awakeTimer = setTimeout(() => { awake = false; paintListen(); }, ACTIVE_MS);
+function sleepAgain(){
+  awake = false; capText = ""; clearTimeout(sendTimer); clearTimeout(waitTimer); paintListen();
+}
+function wake(i){
+  awake = true; captureIdx = i; capText = ""; bump(.6);
+  clearTimeout(waitTimer); waitTimer = setTimeout(sleepAgain, WAIT_MS);
+}
+/* junta tudo o que foi dito depois do "Ciel" e envia quando houver uma pausa */
+function update(ev){
+  const parts = [];
+  for (let i = captureIdx; i < ev.results.length; i++){
+    const t = (ev.results[i][0].transcript || "").trim();
+    if (!t) continue;
+    parts.push(i === captureIdx ? parseWake(t).rest : t);
+  }
+  capText = parts.join(" ").replace(/\s+/g, " ").trim();
+  clearTimeout(sendTimer);
+  if (capText){ clearTimeout(waitTimer); sendTimer = setTimeout(fire, SILENCE_MS); bump(.1); }
+  paintListen();
+}
+function fire(){
+  const text = capText;
+  awake = false; capText = ""; clearTimeout(waitTimer);
+  if (!text || STOP.test(text) || !currentUser || !activeApi() || sendBtn.disabled){ paintListen(); return; }
+  voiceTurn = true; input.value = text;
+  ask();                       // mesmo caminho do chat digitado: histórico, imagens, tempo real, voz
 }
 function ensureRec(){
   if (rec) return rec;
-  rec = new SR(); rec.lang = "pt-BR"; rec.continuous = true; rec.interimResults = true;
-  rec.onstart = () => { recRunning = true; recStartAt = Date.now(); paintListen(); };
+  rec = new SR(); rec.lang = "pt-BR"; rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 1;
+  rec.onstart = () => { recRunning = true; recStartAt = Date.now(); captureIdx = 0; paintListen(); };
   rec.onresult = ev => {
-    for (let i = ev.resultIndex; i < ev.results.length; i++){
-      const r = ev.results[i], txt = (r[0].transcript || "").trim();
-      if (!txt) continue;
-      failCount = 0;
-      if (!r.isFinal){ if (awake || parseWake(txt).woke) bump(.15); continue; }
-      handleHeard(txt);
+    failCount = 0;
+    if (!awake){
+      for (let i = ev.resultIndex; i < ev.results.length; i++){
+        const r = ev.results[i], txt = (r[0].transcript || "").trim();
+        if (!txt) continue;
+        if (parseWake(txt).woke){ wake(i); break; }
+        if (r.isFinal) heard = txt.slice(0, 40);
+      }
+      if (!awake){ paintListen(); return; }
     }
+    update(ev);
   };
   rec.onerror = ev => {
     if (ev.error === "not-allowed" || ev.error === "service-not-allowed" || ev.error === "audio-capture"){
@@ -727,7 +758,7 @@ function ensureRec(){
     recRunning = false;
     if (!shouldListen()){ paintListen(); return; }
     failCount = (Date.now() - recStartAt > 3000) ? 0 : failCount + 1;     // se cair toda hora, espera mais antes de tentar de novo
-    scheduleStart(failCount ? Math.min(4000, 300 * Math.pow(2, failCount)) : 150);
+    scheduleStart(failCount ? Math.min(4000, 300 * Math.pow(2, failCount)) : 120);
   };
   return rec;
 }
@@ -739,34 +770,16 @@ function startRec(){
 }
 function stopRec(){ clearTimeout(restartTimer); try{ if (rec) rec.abort(); }catch(e){} }
 
-function handleHeard(txt){
-  const now = Date.now();
-  if (txt === lastFinal && now - lastFinalAt < 2000) return;       // evita resultado repetido
-  lastFinal = txt; lastFinalAt = now;
-  if (!currentUser || !activeApi()) return;
-  const w = parseWake(txt);
-  if (!awake && !w.woke) return;                                   // em espera: ignora o que não começa com "Ciel"
-  if (STOP.test(w.rest)){ awake = false; clearTimeout(awakeTimer); paintListen(); return; }
-  if (!awake){ awake = true; bump(.6); }
-  if (!w.rest){ armAwakeTimer(); paintListen(); return; }          // só disse "Ciel": espera o pedido
-  sendByVoice(w.rest);
-}
-function sendByVoice(text){
-  if (sendBtn.disabled) return;
-  clearTimeout(awakeTimer);
-  voiceTurn = true; input.value = text;
-  ask();                                                           // mesmo caminho do chat digitado: histórico, imagens, tempo real, voz
-}
-/* a Ciel pausa a escuta enquanto pensa e fala (para não ouvir a si mesma) e volta quando termina */
+/* pausa a escuta enquanto a Ciel pensa e fala (para não ouvir a si mesma) e volta a esperar "Ciel" quando termina */
 function wakeOnCore(s){
   if (!wantListen) return;
-  if (s === "idle"){ if (awake) armAwakeTimer(); scheduleStart(600); }
-  else { clearTimeout(awakeTimer); stopRec(); }
+  if (s === "idle") scheduleStart(600);
+  else { awake = false; capText = ""; clearTimeout(sendTimer); clearTimeout(waitTimer); stopRec(); }
   paintListen();
 }
 function wakeSync(){
   if (wantListen && currentUser) scheduleStart(500);
-  else { awake = false; clearTimeout(awakeTimer); stopRec(); }
+  else { sleepAgain(); stopRec(); }
   paintListen();
 }
 optEscuta.addEventListener("change", () => {
