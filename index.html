@@ -27,6 +27,8 @@
   header h1{font-size:1.05rem;margin:0;font-weight:650}
   #status{font-size:.82rem;color:var(--muted)}
   #status.err{color:var(--err)}
+  #listenStat{flex:0 0 auto;text-align:center;font-size:.8rem;color:var(--muted);padding:2px 12px;min-height:1.3em}
+  #listenStat.on{color:var(--ink)}
   #msgs{flex:0 0 auto;height:30vh;height:clamp(120px,32dvh,280px);overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:10px}
   .m{max-width:85%;padding:10px 14px;border-radius:16px;white-space:pre-wrap;overflow-wrap:anywhere}
   .m.user{align-self:flex-end;background:var(--me);color:var(--me-ink);border-bottom-right-radius:4px}
@@ -118,11 +120,13 @@
     <div class="opts">
       <label><input type="checkbox" id="optVoz" checked> Falar</label>
       <label><input type="checkbox" id="optTexto"> Mostrar texto</label>
+      <label title="Diga Ciel para chamar a assistente por voz"><input type="checkbox" id="optEscuta"> 🎙 Ouvir “Ciel”</label>
       <button class="ghost" id="stop" type="button">Parar voz</button>
       <button class="ghost" id="clear" type="button">Nova conversa</button>
     </div>
   </header>
   <div class="core"><canvas id="core" aria-label="Núcleo da Ciel"></canvas></div>
+  <div id="listenStat" hidden></div>
   <div id="msgs"><div class="empty" id="empty">Escreva uma mensagem para começar a conversa.</div></div>
   <div id="tray"></div>
   <form id="f">
@@ -264,6 +268,7 @@ const $ = id => document.getElementById(id);
 const msgs = $("msgs"), input = $("t"), sendBtn = $("send"), statusEl = $("status");
 let cfg = null;
 let history = [];
+let awake = false, voiceTurn = false, wantListen = false;   // ativação por voz
 
 /* ===== VOZ (usa a voz do próprio aparelho, grátis e sem configuração) ===== */
 const optVoz = $("optVoz"), optTexto = $("optTexto");
@@ -351,7 +356,7 @@ const cities = Array.from({length: 300}, () => ({ lon: rnd() * 6.283, lat: (rnd(
 const core = { state: "idle", speed: 1, pulse: 0, t: 0 };
 const SPEED = { idle: 1, thinking: 6, speaking: 2.4 };
 const CREAM = "233,223,196", INK = "#0c0b09", TAU = 6.2832;
-function setCore(s){ core.state = s; }
+function setCore(s){ core.state = s; wakeOnCore(s); }
 function bump(v){ core.pulse = Math.min(1, core.pulse + v); }
 function band(r0, r1){ cx.beginPath(); cx.arc(0, 0, r1, 0, TAU); cx.arc(0, 0, r0, 0, TAU, true); cx.fill(); }
 function render(){
@@ -413,7 +418,9 @@ const calm = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? .25
 let lastT = performance.now();
 function frame(now){
   const dt = Math.min((now - lastT) / 1000, .05); lastT = now;
-  core.speed += (SPEED[core.state] * calm - core.speed) * Math.min(1, dt * 3);
+  const tgt = (awake && core.state === "idle") ? 1.8 : SPEED[core.state];
+  core.speed += (tgt * calm - core.speed) * Math.min(1, dt * 3);
+  if (awake && core.state === "idle") core.pulse = Math.max(core.pulse, .2 + .1 * Math.sin(now / 260));
   core.pulse *= Math.pow(.05, dt);
   if (core.state === "thinking") core.pulse = Math.max(core.pulse, .35 + .15 * Math.sin(now / 180));
   if (core.state === "speaking") core.pulse = Math.max(core.pulse, .35 + .3 * Math.abs(Math.sin(now / 140)));
@@ -633,7 +640,8 @@ async function ask(){
   }finally{
     sendBtn.disabled = false;
     msgs.scrollTop = msgs.scrollHeight;
-    input.focus();
+    if (!voiceTurn) input.focus();   // por voz, não abre o teclado
+    voiceTurn = false;
   }
 }
 
@@ -651,6 +659,127 @@ $("clear").addEventListener("click", () => {
   history = []; chatId = null; chatTitle = "";
   msgs.innerHTML = '<div class="empty" id="empty">Escreva uma mensagem para começar a conversa.</div>';
 });
+
+/* ===== ATIVAÇÃO POR VOZ: diga "Ciel" e converse sem tocar na tela =====
+   Usa o reconhecimento de voz do navegador (Chrome/Edge). Fica em espera até ouvir "Ciel";
+   depois escuta seus pedidos, responde e continua ouvindo por alguns segundos (modo conversa). */
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+const optEscuta = $("optEscuta"), listenStat = $("listenStat");
+const ACTIVE_MS = 25000;                       // tempo de conversa sem precisar repetir "Ciel"
+let rec = null, recRunning = false, recStartAt = 0, failCount = 0;
+let awakeTimer = null, restartTimer = null, flashTimer = null, lastFinal = "", lastFinalAt = 0;
+const WAKE_STRONG = "ciel|ciél|siel|ciell|cyel|kiel|sciel";
+const WAKE_LOOSE = "céu|ceu|ciu|siu|sil|cil|sieu";   // variações que o reconhecimento costuma ouvir (só no começo da frase)
+const GREET = "(?:(?:oi|olá|ola|ei|ey|ê|ô|hey|e aí|e ai|ok|okay|opa)[\\s,]+)?";
+const SEP = "[\\s,!.:;?-]*";
+const reStart = new RegExp("^\\s*" + GREET + "(?:" + WAKE_STRONG + "|" + WAKE_LOOSE + ")(?!\\p{L})" + SEP + "(.*)$", "isu");
+const reAny = new RegExp("(?<!\\p{L})(?:" + WAKE_STRONG + ")(?!\\p{L})" + SEP + "(.*)$", "isu");
+const STOP = /^(tchau|até mais|até logo|pode parar|encerrar|cancelar|esquece)[\s,!.]*$/i;
+try{ wantListen = !!SR && localStorage.getItem("optEscuta") === "1"; }catch(e){}
+optEscuta.checked = wantListen;
+
+function parseWake(t){
+  let m = reStart.exec(t);
+  if (m) return { woke: true, rest: (m[1] || "").trim() };
+  m = reAny.exec(t);
+  if (m) return { woke: true, rest: ((m[1] || "").trim() || t.slice(0, m.index).trim()) };
+  return { woke: false, rest: t.trim() };
+}
+function shouldListen(){ return wantListen && !!currentUser && !document.hidden && core.state === "idle"; }
+function paintListen(){
+  if (!wantListen){ if (!flashTimer) listenStat.hidden = true; return; }
+  if (flashTimer) return;
+  listenStat.hidden = false;
+  listenStat.textContent = core.state !== "idle" ? "🎙 Em pausa enquanto a Ciel responde"
+    : awake ? "🎙 Ouvindo… pode falar" : "🎙 Diga “Ciel” para me chamar";
+  listenStat.classList.toggle("on", awake && core.state === "idle");
+}
+function flashListen(text){
+  clearTimeout(flashTimer); listenStat.hidden = false; listenStat.classList.remove("on"); listenStat.textContent = text;
+  flashTimer = setTimeout(() => { flashTimer = null; paintListen(); }, 7000);
+}
+function armAwakeTimer(){
+  clearTimeout(awakeTimer);
+  awakeTimer = setTimeout(() => { awake = false; paintListen(); }, ACTIVE_MS);
+}
+function ensureRec(){
+  if (rec) return rec;
+  rec = new SR(); rec.lang = "pt-BR"; rec.continuous = true; rec.interimResults = true;
+  rec.onstart = () => { recRunning = true; recStartAt = Date.now(); paintListen(); };
+  rec.onresult = ev => {
+    for (let i = ev.resultIndex; i < ev.results.length; i++){
+      const r = ev.results[i], txt = (r[0].transcript || "").trim();
+      if (!txt) continue;
+      failCount = 0;
+      if (!r.isFinal){ if (awake || parseWake(txt).woke) bump(.15); continue; }
+      handleHeard(txt);
+    }
+  };
+  rec.onerror = ev => {
+    if (ev.error === "not-allowed" || ev.error === "service-not-allowed" || ev.error === "audio-capture"){
+      wantListen = false; awake = false; optEscuta.checked = false;
+      try{ localStorage.setItem("optEscuta", "0"); }catch(e){}
+      flashListen(ev.error === "audio-capture" ? "Não encontrei um microfone neste aparelho."
+        : "Permita o microfone nas configurações do navegador para usar a Ciel por voz.");
+    }
+  };
+  rec.onend = () => {
+    recRunning = false;
+    if (!shouldListen()){ paintListen(); return; }
+    failCount = (Date.now() - recStartAt > 3000) ? 0 : failCount + 1;     // se cair toda hora, espera mais antes de tentar de novo
+    scheduleStart(failCount ? Math.min(4000, 300 * Math.pow(2, failCount)) : 150);
+  };
+  return rec;
+}
+function scheduleStart(ms){ clearTimeout(restartTimer); restartTimer = setTimeout(startRec, ms); }
+function startRec(){
+  if (!shouldListen() || recRunning) return;
+  try{ ensureRec().start(); }catch(e){}
+  paintListen();
+}
+function stopRec(){ clearTimeout(restartTimer); try{ if (rec) rec.abort(); }catch(e){} }
+
+function handleHeard(txt){
+  const now = Date.now();
+  if (txt === lastFinal && now - lastFinalAt < 2000) return;       // evita resultado repetido
+  lastFinal = txt; lastFinalAt = now;
+  if (!currentUser || !activeApi()) return;
+  const w = parseWake(txt);
+  if (!awake && !w.woke) return;                                   // em espera: ignora o que não começa com "Ciel"
+  if (STOP.test(w.rest)){ awake = false; clearTimeout(awakeTimer); paintListen(); return; }
+  if (!awake){ awake = true; bump(.6); }
+  if (!w.rest){ armAwakeTimer(); paintListen(); return; }          // só disse "Ciel": espera o pedido
+  sendByVoice(w.rest);
+}
+function sendByVoice(text){
+  if (sendBtn.disabled) return;
+  clearTimeout(awakeTimer);
+  voiceTurn = true; input.value = text;
+  ask();                                                           // mesmo caminho do chat digitado: histórico, imagens, tempo real, voz
+}
+/* a Ciel pausa a escuta enquanto pensa e fala (para não ouvir a si mesma) e volta quando termina */
+function wakeOnCore(s){
+  if (!wantListen) return;
+  if (s === "idle"){ if (awake) armAwakeTimer(); scheduleStart(600); }
+  else { clearTimeout(awakeTimer); stopRec(); }
+  paintListen();
+}
+function wakeSync(){
+  if (wantListen && currentUser) scheduleStart(500);
+  else { awake = false; clearTimeout(awakeTimer); stopRec(); }
+  paintListen();
+}
+optEscuta.addEventListener("change", () => {
+  if (optEscuta.checked && !SR){
+    optEscuta.checked = false;
+    flashListen("Este navegador não suporta ouvir voz. Use o Chrome ou o Edge.");
+    return;
+  }
+  wantListen = optEscuta.checked;
+  try{ localStorage.setItem("optEscuta", wantListen ? "1" : "0"); }catch(e){}
+  failCount = 0; wakeSync();
+});
+document.addEventListener("visibilitychange", () => { if (document.hidden) stopRec(); else wakeSync(); });
 
 /* ===== LOGIN, CONVERSAS SALVAS, PERFIL E APP INSTALÁVEL ===== */
 const LOGIN_EMAIL = "rimy@ciel.app";
@@ -672,7 +801,7 @@ $("loginForm").addEventListener("submit", async e => {
   finally{ $("lGo").disabled = false; }
 });
 onAuthStateChanged(auth, user => {
-  currentUser = user;
+  currentUser = user; wakeSync();
   if (user){ $("login").hidden = true; loadConfig(); loadProfile(); }
   else {
     $("login").hidden = false; $("loginWait").hidden = true; $("loginForm").hidden = false;
