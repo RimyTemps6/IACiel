@@ -194,6 +194,24 @@
     <div class="note" id="aErr" style="color:var(--err)"></div>
     <button id="aAdd" type="button">Adicionar e usar</button>
     <p class="note">Para a NVIDIA, escolha o serviço NVIDIA e cole a chave (começa com nvapi-). Depois toque em “Buscar modelos” na API para carregar a lista completa e troque de modelo pelo seletor no topo. As APIs que você adiciona aqui ficam salvas só neste aparelho e navegador. Se colar só a base do endereço (terminando em /v1), eu completo com /chat/completions.</p>
+
+    <h3>Voz (Fish Audio)</h3>
+    <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="fUse" style="width:auto;margin:0"> Usar a voz da Fish Audio para falar</label>
+    <label>Chave da Fish Audio <input id="fKey" type="password" placeholder="Cole a chave aqui" autocomplete="off"></label>
+    <label>ID da voz (reference_id) <input id="fVoice" placeholder="Código da voz escolhida" autocomplete="off"></label>
+    <label>Endereço <input id="fUrl" placeholder="https://ciel.rimytemps6.workers.dev/fish/v1/tts" autocomplete="off"></label>
+    <label>Modelo
+      <select id="fModel">
+        <option value="s2.1-pro">s2.1-pro</option>
+        <option value="s2.1-pro-free">s2.1-pro-free</option>
+        <option value="s2-pro">s2-pro</option>
+        <option value="drama-3">drama-3</option>
+      </select>
+    </label>
+    <div class="note" id="fErr"></div>
+    <button id="fSave" type="button" style="margin-top:14px;padding:11px 18px;width:100%">Salvar voz</button>
+    <button class="ghost" id="fTest" type="button" style="margin-top:8px;width:100%;padding:10px">Testar voz</button>
+    <p class="note">A chave da Fish fica salva só neste aparelho e navegador. O endereço passa pelo seu Worker do Cloudflare, para o navegador não bloquear.</p>
   </div>
 </div>
 
@@ -284,7 +302,7 @@ if (!canSpeak){ optVoz.checked = false; optVoz.disabled = true; optTexto.checked
 function savePrefs(){
   try{ localStorage.setItem("optVoz", optVoz.checked ? "1" : "0"); localStorage.setItem("optTexto", optTexto.checked ? "1" : "0"); }catch(e){}
 }
-function stopSpeaking(){ speakId++; setCore("idle"); if (canSpeak) speechSynthesis.cancel(); }
+function stopSpeaking(){ speakId++; fishStop(); setCore("idle"); if (canSpeak) speechSynthesis.cancel(); }
 optVoz.addEventListener("change", () => { if (!optVoz.checked) stopSpeaking(); savePrefs(); });
 optTexto.addEventListener("change", savePrefs);
 $("stop").addEventListener("click", stopSpeaking);
@@ -305,8 +323,10 @@ function cleanForSpeech(t){
   return t.replace(/```[\s\S]*?```/g, " ").replace(/https?:\/\/\S+/g, " link ")
           .replace(/[*_#`>~]/g, "").replace(/\s+/g, " ").trim();
 }
-function speak(text){
-  if (!canSpeak || !optVoz.checked) return;
+function speak(text, noFish){
+  if (!optVoz.checked) return;
+  if (!noFish && fishOn()){ fishSpeak(text); return; }
+  if (!canSpeak) return;
   speechSynthesis.cancel();
   const id = ++speakId, voice = pickVoice();
   const parts = (cleanForSpeech(text).match(/[^.!?\n]+[.!?]*/g) || []).filter(x => x.trim());
@@ -328,6 +348,7 @@ function reactSilent(answer){
 }
 /* Celulares só liberam o áudio depois de um toque: isso "destrava" a voz ao enviar */
 function unlockSpeech(){
+  fishUnlock();
   if (!canSpeak || !optVoz.checked) return;
   const u = new SpeechSynthesisUtterance("."); u.volume = 0; speechSynthesis.speak(u);
 }
@@ -537,6 +558,103 @@ async function fetchModels(a){
   }
 }
 
+/* ===== VOZ FISH AUDIO (passa pelo Worker do Cloudflare por causa do CORS) ===== */
+const FISH_DEFAULT_URL = "https://ciel.rimytemps6.workers.dev/fish/v1/tts";
+let fish = Object.assign({ use: false, key: "", voice: "", url: FISH_DEFAULT_URL, model: "s2.1-pro" }, store.get("ciel_fish", {}));
+const player = new Audio();
+const SILENT = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=";
+let fishUrls = [], fishDone = null;
+function fishOn(){ return !!(fish.use && fish.key && fish.voice && fish.url); }
+function fishStop(){
+  try{ player.pause(); }catch(e){}
+  player.onended = null; player.onerror = null;
+  if (fishDone){ const f = fishDone; fishDone = null; f(); }
+  fishUrls.forEach(u => URL.revokeObjectURL(u)); fishUrls = [];
+}
+function fishUnlock(){            // celulares só liberam o áudio depois de um toque
+  if (!optVoz.checked || !fishOn()) return;
+  try{ player.src = SILENT; player.play().catch(() => {}); }catch(e){}
+}
+function fishChunks(text){
+  const out = []; let cur = "";
+  (cleanForSpeech(text).match(/[^.!?\n]+[.!?]*/g) || []).forEach(s => {
+    s = s.trim(); if (!s) return;
+    if (cur && (cur + " " + s).length > 280){ out.push(cur); cur = s; } else cur = cur ? cur + " " + s : s;
+  });
+  if (cur) out.push(cur);
+  return out;
+}
+async function fishFetch(text){
+  const r = await fetch(fish.url, {
+    method: "POST",
+    headers: { "Authorization": "Bearer " + fish.key, "Content-Type": "application/json", "model": fish.model },
+    body: JSON.stringify({ text, reference_id: fish.voice, format: "mp3", latency: "balanced" })
+  });
+  if (!r.ok){
+    let m = "Erro " + r.status;
+    try{ const d = await r.json(); m = d.message || d.detail || m; }catch(e){}
+    throw new Error(m);
+  }
+  return URL.createObjectURL(await r.blob());
+}
+async function fishSpeak(text){
+  const id = ++speakId, parts = fishChunks(text);
+  fishStop();
+  if (!parts.length){ setCore("idle"); return; }
+  try{
+    let next = fishFetch(parts[0]);
+    for (let i = 0; i < parts.length; i++){
+      const url = await next;
+      if (id !== speakId){ URL.revokeObjectURL(url); return; }
+      fishUrls.push(url);
+      next = i + 1 < parts.length ? fishFetch(parts[i + 1]) : null;   // já busca o próximo trecho enquanto toca
+      if (next) next.catch(() => {});
+      await new Promise((ok, no) => {
+        fishDone = ok;
+        player.onended = () => { fishDone = null; ok(); };
+        player.onerror = () => { fishDone = null; no(new Error("o navegador não conseguiu tocar o áudio")); };
+        player.src = url;
+        player.play().then(() => { if (id === speakId) setCore("speaking"); }).catch(e => { fishDone = null; no(e); });
+      });
+      if (id !== speakId) return;
+    }
+    setCore("idle");
+  }catch(e){
+    if (id !== speakId) return;
+    setCore("idle");
+    add("error", "A voz da Fish falhou (" + e.message + "). Usando a voz do aparelho.");
+    speak(text, true);
+  }
+}
+function fishMsg(text, bad){ const e = $("fErr"); e.textContent = text; e.style.color = bad ? "var(--err)" : "var(--muted)"; }
+function fishRead(){
+  return { use: $("fUse").checked, key: $("fKey").value.trim(), voice: $("fVoice").value.trim(), url: $("fUrl").value.trim() || FISH_DEFAULT_URL, model: $("fModel").value };
+}
+function fishPaint(){
+  $("fUse").checked = !!fish.use; $("fKey").value = fish.key; $("fVoice").value = fish.voice; $("fUrl").value = fish.url; $("fModel").value = fish.model;
+}
+fishPaint();
+$("fSave").addEventListener("click", () => {
+  const v = fishRead();
+  if (v.use && (!v.key || !v.voice)){ fishMsg("Para usar a Fish, preencha a chave e o ID da voz.", true); return; }
+  if (!/^https:\/\//i.test(v.url)){ fishMsg("O endereço precisa começar com https://", true); return; }
+  fish = v; store.set("ciel_fish", fish);
+  fishMsg(fishOn() ? "Salvo. A Ciel vai falar com a voz da Fish." : "Salvo. A Fish está desligada: a Ciel usa a voz do aparelho.");
+});
+$("fTest").addEventListener("click", async () => {
+  const v = fishRead();
+  if (!v.key || !v.voice){ fishMsg("Preencha a chave e o ID da voz.", true); return; }
+  if (!/^https:\/\//i.test(v.url)){ fishMsg("O endereço precisa começar com https://", true); return; }
+  fish = v; store.set("ciel_fish", fish); fishMsg("Gerando o áudio…");
+  try{
+    const url = await fishFetch("Olá Rimy, a voz da Fish Audio está funcionando.");
+    fishStop(); fishUrls.push(url); player.src = url; await player.play();
+    fishMsg("Tocando. Se você ouviu a voz, está tudo certo.");
+  }catch(e){
+    fishMsg("Não funcionou: " + (/Failed to fetch|NetworkError|Load failed/i.test(e.message) ? "o navegador não conseguiu falar com o endereço. Confira se o Worker foi atualizado e se o endereço está certo." : e.message), true);
+  }
+});
+
 function setStatus(text, isErr){ statusEl.textContent = text; statusEl.classList.toggle("err", !!isErr); }
 
 function add(role, text){
@@ -679,7 +797,7 @@ async function ask(){
     history.push({ role: "assistant", content: answer });
     saveChat();
     showAnswer(bubble, answer);
-    if (canSpeak && optVoz.checked) speak(answer); else reactSilent(answer);
+    if (optVoz.checked && (canSpeak || fishOn())) speak(answer); else reactSilent(answer);
   }catch(err){
     bubble.remove(); setCore("idle");
     history.pop();
