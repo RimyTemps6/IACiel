@@ -58,7 +58,7 @@
   .chip img{width:44px;height:44px;object-fit:cover;border-radius:6px}
   .chip b{cursor:pointer;color:var(--ink);font-size:1rem}
   .m img{max-width:150px;border-radius:8px;display:block;margin-bottom:6px}
-  .apirow{display:flex;gap:6px;margin-top:4px}
+  .apirow{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
   .apirow select{padding:4px 8px;border:1px solid var(--line);border-radius:10px;background:transparent;color:var(--muted);font:inherit;font-size:.82rem;max-width:190px}
   .panel{position:fixed;inset:0;background:rgba(0,0,0,.72);display:flex;align-items:flex-end;justify-content:center;z-index:20}
   .panel[hidden]{display:none}
@@ -67,9 +67,9 @@
   .sheet h3{margin:16px 0 0;font-size:.95rem}
   .sheet label{display:block;font-size:.8rem;color:var(--muted);margin-top:10px}
   .sheet input,.sheet select{width:100%;margin-top:4px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);font:inherit}
-  .row{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;margin-bottom:6px}
+  .row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;margin-bottom:6px}
   .row.on{border-color:var(--me)}
-  .row .info{flex:1;min-width:0;font-size:.9rem}
+  .row .info{flex:1 1 140px;min-width:0;font-size:.9rem}
   .row .info small{display:block;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .note{font-size:.78rem;color:var(--muted);margin:10px 0 0}
   #aAdd{margin-top:14px;padding:11px 18px;width:100%}
@@ -87,7 +87,7 @@
   .side{width:min(86vw,340px);height:100%;background:#14110d;border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden;padding-top:env(safe-area-inset-top,0px)}
   .banner{height:110px;flex:0 0 auto;background:#1d1911 center/cover no-repeat;position:relative}
   .banner .ghost{position:absolute;right:8px;bottom:8px;background:rgba(12,11,9,.75)}
-  .who{display:flex;align-items:flex-end;gap:12px;padding:0 14px;margin-top:-30px;flex:0 0 auto}
+  .who{display:flex;align-items:flex-end;gap:12px;padding:0 14px;margin-top:-30px;flex:0 0 auto;position:relative;z-index:2}
   .avatar{width:64px;height:64px;border-radius:50%;border:3px solid #14110d;background:#2a251b center/cover no-repeat;flex:0 0 auto}
   .who div{padding-bottom:4px}
   .side .top{padding:12px 14px 0;flex:0 0 auto}
@@ -115,7 +115,7 @@
     <div style="flex:1;min-width:0">
       <h1>Chatbot IA</h1>
       <div id="status">Conectando ao banco de dados…</div>
-      <div class="apirow"><select id="apiSel" aria-label="API em uso" disabled></select><button class="ghost" id="apiBtn" type="button">⚙ APIs</button></div>
+      <div class="apirow"><select id="apiSel" aria-label="API em uso" disabled></select><select id="modelSel" aria-label="Modelo em uso" disabled></select><button class="ghost" id="apiBtn" type="button">⚙ APIs</button></div>
     </div>
     <div class="opts">
       <label><input type="checkbox" id="optVoz" checked> Falar</label>
@@ -175,10 +175,12 @@
   <div class="sheet">
     <div class="sheet-head"><b>APIs da Ciel</b><button class="ghost" id="apiClose" type="button">Fechar</button></div>
     <div id="apiList"></div>
+    <div class="note" id="listErr" style="color:var(--err)"></div>
     <h3>Adicionar API</h3>
     <label>Nome <input id="aName" placeholder="Ex.: Minha Groq" autocomplete="off"></label>
     <label>Serviço
       <select id="aPreset">
+        <option value="nvidia">NVIDIA</option>
         <option value="apinex">APInex</option>
         <option value="groq">Groq</option>
         <option value="openrouter">OpenRouter</option>
@@ -191,7 +193,7 @@
     <label>Modelo para imagens (opcional) <input id="aVision" placeholder="Deixe vazio se não souber" autocomplete="off"></label>
     <div class="note" id="aErr" style="color:var(--err)"></div>
     <button id="aAdd" type="button">Adicionar e usar</button>
-    <p class="note">As APIs que você adiciona aqui ficam salvas só neste aparelho e navegador. Se colar só a base do endereço (terminando em /v1), eu completo com /chat/completions.</p>
+    <p class="note">Para a NVIDIA, escolha o serviço NVIDIA e cole a chave (começa com nvapi-). Depois toque em “Buscar modelos” na API para carregar a lista completa e troque de modelo pelo seletor no topo. As APIs que você adiciona aqui ficam salvas só neste aparelho e navegador. Se colar só a base do endereço (terminando em /v1), eu completo com /chat/completions.</p>
   </div>
 </div>
 
@@ -437,7 +439,7 @@ let customApis = store.get("ciel_apis", []);
 let activeId = store.get("ciel_active", "firestore");
 function allApis(){
   const l = [];
-  if (cfg) l.push({ id: "firestore", name: "Padrão (Firestore)", key: cfg.key, url: cfg.url, model: cfg.model, visionModel: cfg.visionModel, builtin: true });
+  if (cfg) l.push({ id: "firestore", name: "Padrão (Firestore)", key: cfg.key, url: cfg.url, model: store.get("ciel_model_firestore", cfg.model), models: store.get("ciel_models_firestore", []), visionModel: cfg.visionModel, builtin: true });
   return l.concat(customApis);
 }
 function activeApi(){ const l = allApis(); return l.find(a => a.id === activeId) || l[0] || null; }
@@ -449,6 +451,13 @@ function refreshApis(){
   l.forEach(x => { const o = document.createElement("option"); o.value = x.id; o.textContent = x.name; sel.append(o); });
   if (a) sel.value = a.id;
   sel.disabled = !l.length;
+  const ms = $("modelSel"); ms.textContent = "";
+  if (a){
+    modelsOf(a).forEach(m => { const o = document.createElement("option"); o.value = m; o.textContent = m; ms.append(o); });
+    const oo = document.createElement("option"); oo.value = "__other"; oo.textContent = "✎ Outro modelo…"; ms.append(oo);
+    ms.value = a.model;
+  }
+  ms.disabled = !a;
   l.forEach(x => {
     const r = document.createElement("div"); r.className = "row" + (a && a.id === x.id ? " on" : "");
     const info = document.createElement("div"); info.className = "info";
@@ -456,6 +465,7 @@ function refreshApis(){
     const s = document.createElement("small"); s.textContent = x.model + " · " + x.url.replace(/^https?:\/\//, "") + " · chave ••••" + String(x.key).slice(-4);
     info.append(t, s); r.append(info);
     r.append(mkBtn(a && a.id === x.id ? "Em uso" : "Usar", () => chooseApi(x.id)));
+    r.append(mkBtn("Buscar modelos", () => fetchModels(x)));
     if (!x.builtin) r.append(mkBtn("Excluir", () => {
       if (!confirm("Excluir " + x.name + "?")) return;
       customApis = customApis.filter(c => c.id !== x.id); store.set("ciel_apis", customApis); refreshApis();
@@ -466,12 +476,16 @@ function refreshApis(){
   if (a) setStatus("Pronto · " + a.name + " · modelo " + a.model);
 }
 const PRESETS = {
+  nvidia: { url: "https://integrate.api.nvidia.com/v1/chat/completions", model: "meta/llama-3.3-70b-instruct", vision: "meta/llama-3.2-90b-vision-instruct",
+    models: ["meta/llama-3.3-70b-instruct", "meta/llama-3.1-405b-instruct", "meta/llama-3.1-70b-instruct", "meta/llama-3.1-8b-instruct",
+      "meta/llama-3.2-90b-vision-instruct", "nvidia/llama-3.1-nemotron-70b-instruct", "deepseek-ai/deepseek-r1", "mistralai/mixtral-8x22b-instruct-v0.1",
+      "google/gemma-2-27b-it", "qwen/qwen2.5-coder-32b-instruct", "microsoft/phi-3.5-vision-instruct"] },
   apinex: { url: "https://api.apinex.bond/v1/chat/completions", model: "free/deepseek-v4-pro-0813" },
   groq: { url: "https://api.groq.com/openai/v1/chat/completions", model: "openai/gpt-oss-120b" },
   openrouter: { url: "https://openrouter.ai/api/v1/chat/completions", model: "" },
   outro: { url: "", model: "" }
 };
-function applyPreset(){ const p = PRESETS[$("aPreset").value]; $("aUrl").value = p.url; $("aModel").value = p.model; }
+function applyPreset(){ const p = PRESETS[$("aPreset").value]; $("aUrl").value = p.url; $("aModel").value = p.model; $("aVision").value = p.vision || ""; }
 $("aPreset").addEventListener("change", applyPreset); applyPreset();
 $("apiBtn").addEventListener("click", () => { $("apiPanel").hidden = false; });
 $("apiClose").addEventListener("click", () => { $("apiPanel").hidden = true; });
@@ -484,11 +498,44 @@ $("aAdd").addEventListener("click", () => {
   if (!/^https:\/\//i.test(url)){ err.textContent = "O endereço precisa começar com https://"; return; }
   if (!/chat\/completions\/?$/i.test(url)) url = url.replace(/\/+$/, "") + "/chat/completions";
   const id = "c" + Date.now();
-  customApis.push({ id, name: $("aName").value.trim() || "API " + (customApis.length + 1), key, url, model, visionModel: $("aVision").value.trim() });
+  customApis.push({ id, name: $("aName").value.trim() || "API " + (customApis.length + 1), key, url, model, models: PRESETS[$("aPreset").value].models || [], visionModel: $("aVision").value.trim() });
   store.set("ciel_apis", customApis);
-  ["aName", "aKey", "aVision"].forEach(i => $(i).value = ""); err.textContent = ""; applyPreset();
+  ["aName", "aKey"].forEach(i => $(i).value = ""); err.textContent = ""; applyPreset();
   chooseApi(id);
 });
+
+function modelsOf(a){ const s = new Set(a.models || []); if (a.model) s.add(a.model); return [...s]; }
+function setModel(a, m){
+  if (a.builtin) store.set("ciel_model_firestore", m);
+  else { const c = customApis.find(x => x.id === a.id); if (c){ c.model = m; store.set("ciel_apis", customApis); } }
+  refreshApis();
+}
+function saveModels(a, list){
+  if (a.builtin) store.set("ciel_models_firestore", list);
+  else { const c = customApis.find(x => x.id === a.id); if (c){ c.models = list; store.set("ciel_apis", customApis); } }
+}
+$("modelSel").addEventListener("change", e => {
+  const a = activeApi(); if (!a) return;
+  if (e.target.value === "__other"){
+    const m = (prompt("Nome exato do modelo (ex.: meta/llama-3.3-70b-instruct):") || "").trim();
+    if (m) saveModels(a, [...new Set([...(a.models || []), m])]);
+    setModel(a, m || a.model);
+  } else setModel(a, e.target.value);
+});
+async function fetchModels(a){
+  const err = $("listErr"); err.textContent = "Buscando modelos de " + a.name + "…";
+  try{
+    const r = await fetch(a.url.replace(/\/chat\/completions\/?$/i, "") + "/models", { headers: { "Authorization": "Bearer " + a.key } });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d?.error?.message || d?.detail || ("Erro " + r.status));
+    const ids = (d.data || []).map(x => x.id).filter(Boolean).filter(id => !/embed|rerank|reward|retriev/i.test(id)).sort();
+    if (!ids.length) throw new Error("a API não devolveu nenhum modelo");
+    saveModels(a, ids); refreshApis(); $("listErr").textContent = "";
+    setStatus(ids.length + " modelos carregados · escolha no seletor do topo");
+  }catch(e){
+    err.textContent = "Não consegui buscar a lista (" + e.message + "). Você ainda pode usar “✎ Outro modelo…” e digitar o nome.";
+  }
+}
 
 function setStatus(text, isErr){ statusEl.textContent = text; statusEl.classList.toggle("err", !!isErr); }
 
@@ -627,8 +674,8 @@ async function ask(){
       })
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data?.error?.message || ("Erro " + res.status));
-    const answer = data.choices?.[0]?.message?.content || "(sem resposta)";
+    if (!res.ok) throw new Error(data?.error?.message || data?.detail || data?.title || ("Erro " + res.status));
+    const answer = (data.choices?.[0]?.message?.content || "").replace(/<think>[\s\S]*?<\/think>/gi, "").trim() || "(sem resposta)";
     history.push({ role: "assistant", content: answer });
     saveChat();
     showAnswer(bubble, answer);
@@ -636,7 +683,7 @@ async function ask(){
   }catch(err){
     bubble.remove(); setCore("idle");
     history.pop();
-    add("error", "Não foi possível obter a resposta: " + err.message);
+    add("error", "Não foi possível obter a resposta: " + (/Failed to fetch|NetworkError|Load failed/i.test(err.message) ? "o navegador não conseguiu falar com essa API (bloqueio de CORS ou sem internet). Veja o LEIA-ME, parte do proxy." : err.message));
   }finally{
     sendBtn.disabled = false;
     msgs.scrollTop = msgs.scrollHeight;
